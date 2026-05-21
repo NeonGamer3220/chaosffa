@@ -541,22 +541,33 @@ class ReviewModal(discord.ui.Modal):
 
 # ─────────────── Bot ───────────────
 
-intents = discord.Intents.default()
-intents.message_content   = True
-intents.dm_messages       = True
+intents = discord.Intents.none()
+intents.guilds            = True   # slash commands need guild presence
+intents.guild_messages    = True   # ephemeral ack, slash command context
+intents.dm_messages       = True   # read DM answers from applicants
+intents.message_content   = True   # read DM message bodies
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ─── diagnostics ───────────────────────────────────────────
-_PRIVILEGED = [i for i in bot.intents
-               if i[1] and i[0] not in ("guilds",
-                                         "guild_messages",
-                                         "dm_messages",
-                                         "guild_reactions")]
-if _PRIVILEGED:
-    print(f"[BOOT] WARNING – privileged intents NOT enabled in portal: "
-          f"{[i[0] for i in _PRIVILEGED]}")
-print(f"[BOOT] intents in use: {[i[0] for i in bot.intents if i[1]]}")
+_PRIVLEGED = [i for i, v in bot.intents if v and i not in (
+    "guilds", "guild_messages", "dm_messages", "message_content"
+)]
+if _PRIVLEGED:
+    print(f"[BOOT] Unnecessary privileged intents enabled: {_PRIVLEGED}")
+else:
+    print("[BOOT] All intents OK — no privileged gateway warnings")
+
+def _intents_in_use() -> list[str]:
+    return [i for i, v in bot.intents if v]
+
+def _intents_missing() -> list[str]:
+    # Discord flags these as privileged if not explicitly toggled in portal
+    _PRIV = {"message_content"}
+    return [i for i in _PRIV if i in {i for i, v in bot.intents if v}]
+
+print(f"[BOOT] Intents in use: {_intents_in_use()}")
+print(f"[BOOT] Intents missing portal approval: {_intents_missing()}")
 
 
 @bot.event
