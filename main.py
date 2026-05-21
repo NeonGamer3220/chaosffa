@@ -245,10 +245,10 @@ class CloseBtn(discord.ui.Button):
         super().__init__(label=label, style=discord.ButtonStyle.red)
         self.role = role
 
-    async def callback(self, interaction: discord.Interaction) -> None:
+async def callback(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sessions.pop(uid, None)
-        await save_async()
+        asyncio.create_task(save_state())
         if self.view:
             self.view.stop()
         for c in self.view.children:
@@ -257,9 +257,9 @@ class CloseBtn(discord.ui.Button):
         try:
             await interaction.followup.send(
                 embed=discord.Embed(
-                    title="**Jelentkez\u00e9s megszak\u00edtva**",
-                    description=f"Sikeresen megszak\u00edtottad a ChaosFFA {self.role} jelentkez\u00e9st!",
-                    color=LIGHT_RED,))
+                    title="**Jelentkezés megszakítva**",
+                    description=f"Sikeresen megszakítottad a ChaosFFA {self.role} jelentkezést!",
+                    color=LIGHT_RED))
         except Exception:
             pass
 
@@ -385,7 +385,7 @@ class ConfirmView(discord.ui.View):
         for c in self.children:
             c.disabled = True
         await interaction.response.edit_message(view=self)
-        await save_async()
+        asyncio.create_task(save_state())
 
         ch = await dm_ch(sess)
         if ch is None:
@@ -435,20 +435,23 @@ class SubmitView(discord.ui.View):
         a_name   = self.aname
         sub_name = sess["submitter_name"]
         staff_ch = bot.get_channel(STAFF_CHANNEL_ID)
-        if staff_ch is None:
+        if staff_ch is None and GUILD_ID:
             try:
-                staff_guild = bot.get_guild(STAFF_CHANNEL_ID) or (await bot.fetch_guild(GUILD_ID) if GUILD_ID else None)
+                staff_guild = bot.get_guild(GUILD_ID) or await bot.fetch_guild(GUILD_ID)
                 if staff_guild:
                     staff_ch = staff_guild.get_channel(STAFF_CHANNEL_ID) or await staff_guild.fetch_channel(STAFF_CHANNEL_ID)
             except Exception as e:
                 return await interaction.response.send_message(
                     f"Nem sikerült elérni a staff csatornát: {e}", ephemeral=True)
+        elif staff_ch is None:
+            return await interaction.response.send_message(
+                "Nem sikerült elérni a staff csatornát (hiányzó GUILD_ID).", ephemeral=True)
 
         self.stop()
         for c in self.children:
             c.disabled = True
         await interaction.response.edit_message(view=self)
-        await save_async()
+        asyncio.create_task(save_state())
 
         e = discord.Embed(
             title=f"**ChaosFFA {role} jelentkez\u00e9s**",
