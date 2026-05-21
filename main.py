@@ -547,6 +547,17 @@ intents.dm_messages       = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ─── diagnostics ───────────────────────────────────────────
+_PRIVILEGED = [i for i in bot.intents
+               if i[1] and i[0] not in ("guilds",
+                                         "guild_messages",
+                                         "dm_messages",
+                                         "guild_reactions")]
+if _PRIVILEGED:
+    print(f"[BOOT] WARNING – privileged intents NOT enabled in portal: "
+          f"{[i[0] for i in _PRIVILEGED]}")
+print(f"[BOOT] intents in use: {[i[0] for i in bot.intents if i[1]]}")
+
 
 @bot.event
 async def on_ready():
