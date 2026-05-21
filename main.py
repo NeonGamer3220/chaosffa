@@ -581,26 +581,48 @@ async def on_ready():
             synced = await bot.tree.sync()
             scope = "global"
         print(f"Logged in as {bot.user} | synced {len(synced)} slash commands ({scope})")
+
+        # Print re-invite link if bot lacks applications.commands scope
+        if not synced:
+            invite = (
+                f"https://discord.com/oauth2/authorize"
+                f"?client_id={bot.user.id}"
+                f"&scope=bot+applications.commands"
+                f"&permissions=0"
+            )
+            print(f"[INVITE] 0 commands synced — re-invite with applications.commands scope:")
+            print(f"[INVITE] {invite}")
     except Exception as e:
         print(f"Sync error: [{type(e).__name__}] {e}")
         import traceback; traceback.print_exc()
 
-    # Also sync to every guild the bot is already in (instant, no GUILD_ID needed)
-    try:
-        count = 0
-        failures = []
+    # ── Per-guild instant sync to every guild the bot is already in ──
+    if bot.guilds:
+        ok = fail = 0
         for g in bot.guilds:
             try:
-                await bot.tree.sync(guild=discord.Object(id=g.id))
-                count += 1
+                r = await bot.tree.sync(guild=discord.Object(id=g.id))
+                ok += 1
+                print(f"  [SYNC] guild {g.name} ({g.id}): {len(r)} commands")
             except Exception as exc:
-                failures.append(f"{g.name}({g.id}): {exc}")
-        if failures:
-            print(f"Per-guild sync: {count} ok, {len(failures)} failed: {failures}")
-        else:
-            print(f"Per-guild sync: all {count} guilds ok")
-    except Exception as e:
-        print(f"Per-guild sync error: {e}")
+                fail += 1
+                print(f"  [SYNC] guild {g.name} ({g.id}): FAILED {exc}")
+        print(f"[SYNC] Guilds done: {ok} ok, {fail} failed")
+    else:
+        print("[SYNC] Bot is in 0 guilds — cannot sync any commands")
+
+    # ── Print re-invite URL if the bot was added without applications.commands scope ──
+    total_synced = len(await bot.tree.fetch_commands())
+    if not total_synced:
+        invite = (
+            f"https://discord.com/api/oauth2/authorize"
+            f"?client_id={bot.user.id}"
+            f"&scope=bot+applications.commands"
+            f"&permissions=0"
+        )
+        print(f"[INVITE] 0 commands available — re-invite the bot:")
+        print(f"[INVITE] {invite}")
+
 
 
 # ─── Slash command ───────────────────────────────────────────────
