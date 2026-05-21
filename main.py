@@ -159,40 +159,47 @@ def _fingerprints() -> dict[str, list[int]]:
             for uid, s in sessions.items() if s.get("_seen")}
 
 async def save_state() -> None:
-    """Write sessions + fingerprints atomically."""
-    async with _lock:
-        # sessions
-        to_save = {}
-        for uid, s in sessions.items():
-            safe = {k: v for k, v in s.items()
-                    if k not in ("channel", "view", "review_msg")}
-            if isinstance(safe.get("started_at"), datetime.datetime):
-                safe["started_at"] = _iso(safe["started_at"])
-            if isinstance(safe.get("deadline"), datetime.datetime):
-                safe["deadline"] = _iso(safe["deadline"])
-            if isinstance(safe.get("_seen"), set):
-                safe["_seen"] = sorted(safe["_seen"])
-            to_save[str(uid)] = safe
-        _STORE.parent.mkdir(parents=True, exist_ok=True)
-        t = _STORE.with_suffix(".tmp")
-        try:
-            t.write_text(json.dumps(to_save, ensure_ascii=False, indent=2), encoding="utf-8")
-            t.replace(_STORE)
-        except Exception:
-            pass
+    """Write sessions + fingerprints to disk. Atomic, caller-awaitable."""
+    copies: dict[str, dict] = {}
+    for uid, s in sessions.items():
+        safe: dict = {}
+        for k, v in s.items():
+            if isinstance(v, set):
+                safe[k] = sorted(v)
+            elif isinstance(v, discord.ui.View):
+                continue
+            elif isinstance(v, discord.ui.Button):
+                continue
+            elif isinstance(v, (discord.TextInput, discord.ui.Modal)):
+                continue
+            else:
+                safe[k] = v
+        if isinstance(safe.get("started_at"), datetime.datetime):
+            safe["started_at"] = safe["started_at"].isoformat()
+        if isinstance(safe.get("deadline"), datetime.datetime):
+            safe["deadline"] = safe["deadline"].isoformat()
+        copies[str(uid)] = safe
 
-        # fingerprints
-        fp = _fingerprints()
-        if fp:
-            tf = _FP_PATH.with_suffix(".tmp")
-            try:
-                tf.write_text(json.dumps(fp, indent=2), encoding="utf-8")
-                tf.replace(_FP_PATH)
-            except Exception:
-                pass
+    _STORE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _STORE.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(copies, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(_STORE)
+    except Exception as exc:
+        print(f"[WARN] sessions save failed: {exc}")
+
+    fp = _fingerprints()
+    if fp:
+        tmpf = _FP_PATH.with_suffix(".tmp")
+        try:
+            tmpf.write_text(json.dumps(fp, indent=2), encoding="utf-8")
+            tmpf.replace(_FP_PATH)
+        except Exception as exc:
+            print(f"[WARN] fp save failed: {exc}")
 
 async def save_async() -> None:
-    asyncio.create_task(save_state())
+    """Save state synchronously; callers already run sequentially so no lock needed."""
+    await save_state()
 
 # ─────────────── in-memory stores ───────────────
 sessions:      dict[int, dict] = {}   # uid → session dict
@@ -669,7 +676,7 @@ async def on_message(message: discord.Message):
 
     uid  = message.author.id
     sess = sessions.get(uid)
-    if not sess or sess.get("step") is None:
+    if not sess or sess.get("step") is None or not sess.get("_interacted"):
         return
 
     # ── idempotency: skip messages already processed ──
@@ -678,7 +685,7 @@ async def on_message(message: discord.Message):
         return
     seen.add(message.id)
     sess["_seen"] = seen
-    asyncio.create_task(save_state())
+    await save_state()
 
     # ── deadline ──
     dl = sess.get("deadline")
@@ -695,7 +702,7 @@ async def on_message(message: discord.Message):
 
     sess["answers"][step] = message.content.strip()
     sess["step"] = step + 1
-    asyncio.create_task(save_state())
+    await save_state()
 
     # ── all done → confirmation embed ──
     if step + 1 >= total:
