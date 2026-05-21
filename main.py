@@ -544,7 +544,6 @@ class ReviewModal(discord.ui.Modal):
 intents = discord.Intents.default()
 intents.message_content   = True
 intents.dm_messages       = True
-intents.members           = True   # needed to register button callbacks globally
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
