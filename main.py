@@ -12,6 +12,7 @@ LIGHT_PURPLE = discord.Color(0xBB86FC)
 LIGHT_GREEN  = discord.Color(0x00E676)
 
 STAFF_CHANNEL_ID  = 1507023523674193962
+GUILD_ID          = int(os.getenv("GUILD_ID", "0"))   # 0 = global sync
 TIME_LIMIT_MINUTES = 60
 
 # ─────────────── questions ───────────────
@@ -573,11 +574,13 @@ print(f"[BOOT] Intents missing portal approval: {_intents_missing()}")
 @bot.event
 async def on_ready():
     try:
-        synced = await bot.tree.sync()
-        print(f"Logged in as {bot.user} | synced {len(synced)} slash commands")
-        await bot.change_presence(
-            activity=discord.Game(name=f"{len(QUESTIONS)} szerepkör – {sum(len(v) for v in QUESTIONS.values())} kérdés")
-        )
+        if GUILD_ID:
+            synced = await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+            scope = f"guild {GUILD_ID}"
+        else:
+            synced = await bot.tree.sync()
+            scope = "global"
+        print(f"Logged in as {bot.user} | synced {len(synced)} slash commands ({scope})")
     except Exception as e:
         print(f"Sync error: {e}")
 
