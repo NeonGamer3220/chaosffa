@@ -300,15 +300,29 @@ class StartView(discord.ui.View):
         session["view"] = q_view
         await _async_save()
 
+        # Resolve DM channel — first cache, then REST create_dm
+        ch = bot.get_channel(session["dm_channel_id"]) if session.get("dm_channel_id") else None
+        if ch is None and session.get("submitter_id"):
+            try:
+                user = await bot.fetch_user(session["submitter_id"])
+                ch = await user.create_dm()
+            except Exception:
+                pass
+        if ch is None:
+            return await interaction.followup.send(
+                "Nem sikerült újra megnyitni a DM csatornát. Kérd a staffot, hogy újra küldje a jelentkezést.",
+                ephemeral=True,
+            )
+
         q_embed = discord.Embed(
-            title=f"**ChaosFFA {role} jelentkez\u00e9s \u2013 1. k\u00e9rd\u00e9s**",
+            title=f"**ChaosFFA {role} jelentkezés – 1. kérdés**",
             description=questions[0],
             color=LIGHT_PURPLE,
         )
         q_embed.set_footer(
-            text=f"V\u00e1laszk\u00e9nt k\u00fcldj egy DM \u00fczenetet a botnak.\nLej\u00e1rat: 7 napja\n1/{total} k\u00e9rd\u00e9s"
+            text=f"Válaszként küldj egy DM üzenetet a botnak.\nLejárat: 7 napja\n1/{total} kérdés"
         )
-        await session["channel"].send(embed=q_embed, view=q_view)
+        await ch.send(embed=q_embed, view=q_view)
 
 
 # ─────────────── View 2 – per question embed ───────────────
@@ -368,12 +382,23 @@ class SubmitViewConfirmation(discord.ui.View):
 
         role        = session["type"]
         answers     = session["answers"]
-        channel     = session["channel"]
         submitter_n = session["submitter_name"]
         started_at  = session["started_at"]
 
         now       = _now_utc()
         elapsed_s = int((now - started_at).total_seconds())
+
+        ch = bot.get_channel(session["dm_channel_id"]) if session.get("dm_channel_id") else None
+        if ch is None and session.get("submitter_id"):
+            try:
+                user = await bot.fetch_user(session["submitter_id"])
+                ch = await user.create_dm()
+            except Exception:
+                pass
+        if ch is None:
+            return await interaction.response.send_message(
+                "Nem sikerült újra megnyitni a DM csatornát.", ephemeral=True
+            )
 
         for c in self.children:
             c.disabled = True
@@ -396,7 +421,7 @@ class SubmitViewConfirmation(discord.ui.View):
             submitter_id=self.uid, role=role, total=self.total,
             author_name=submitter_n, started_at=started_at,
         )
-        await channel.send(embed=summary, view=submit_view)
+        await ch.send(embed=summary, view=submit_view)
 
 
 # ─────────────── View 4 – beküldés staffnak / lezárás ───────────────
