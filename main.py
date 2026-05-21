@@ -7,9 +7,9 @@ from discord import app_commands
 from discord.ext import commands
 
 # ─────────────── colours / constants ───────────────
-LIGHT_RED    = discord.Color.from_rgb(0xFF5555)
-LIGHT_PURPLE = discord.Color.from_rgb(0xBB86FC)
-LIGHT_GREEN  = discord.Color.from_rgb(0x00E676)
+LIGHT_RED    = discord.Color(0xFF5555)
+LIGHT_PURPLE = discord.Color(0xBB86FC)
+LIGHT_GREEN  = discord.Color(0x00E676)
 
 STAFF_CHANNEL_ID  = 1507023523674193962
 TIME_LIMIT_MINUTES = 60
@@ -440,10 +440,10 @@ class StaffReviewView(discord.ui.View):
         self.add_item(reject_btn)
 
     async def _accept(self, interaction: discord.Interaction) -> None:
-        await self._prompt(interaction, "elfogadva", discord.Color.from_rgb(0x00E676))
+        await self._prompt(interaction, "elfogadva", discord.Color(0x00E676))
 
     async def _reject(self, interaction: discord.Interaction) -> None:
-        await self._prompt(interaction, "elutasítva", discord.Color.from_rgb(0xFF1744))
+        await self._prompt(interaction, "elutasítva", discord.Color(0xFF1744))
 
     async def _prompt(
         self,
