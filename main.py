@@ -267,6 +267,14 @@ class CloseBtn(discord.ui.Button):
 # ─────────────── View 1 – initial embed ───────────────
 
 class StartView(discord.ui.View):
+    def __init__(self, role: str):
+        super().__init__(timeout=None)
+        self.role = role
+        g = discord.ui.Button(label="Jelentkezés indítása", style=discord.ButtonStyle.green)
+        g.callback = self._go
+        self.add_item(g)
+        self.add_item(CloseBtn(role, "Mégsem"))
+
     async def _go(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sess = sessions.get(uid)
@@ -317,14 +325,6 @@ class StartView(discord.ui.View):
                             f"Lejárat: 7 napja\n1/{total} kérdés")
         await ch.send(embed=e, view=v)
         print(f"[DEBUG] _go: sent first question to uid={uid}, step=0")
-
-    def __init__(self, role: str):
-        super().__init__(timeout=None)
-        self.role = role
-        g = discord.ui.Button(label="Jelentkezés indítása", style=discord.ButtonStyle.green)
-        g.callback = self._go
-        self.add_item(g)
-        self.add_item(CloseBtn(role, "Mégsem"))
 
 
 # ─────────────── View 2 – per-question ───────────────
