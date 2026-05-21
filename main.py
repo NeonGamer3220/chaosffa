@@ -693,14 +693,18 @@ async def on_message(message: discord.Message):
             print(f"[DEBUG] on_message: _interacted is False for uid={uid}")
             return
 
-        # ── idempotency: skip messages already processed ──
-        seen: set[int] = sess.get("_seen", set())
-        if message.id in seen:
-            print(f"[DEBUG] on_message: message {message.id} already seen, skipping")
-            return
-        seen.add(message.id)
-        sess["_seen"] = seen
+# ── idempotency: skip messages already processed ──
+    seen: set[int] = sess.get("_seen", set())
+    if message.id in seen:
+        print(f"[DEBUG] on_message: message {message.id} already seen, skipping")
+        return
+    seen.add(message.id)
+    sess["_seen"] = seen
+    try:
         await save_state()
+        print(f"[DEBUG] on_message: saved state for uid={uid}")
+    except Exception as e:
+        print(f"[ERROR] on_message: save_state failed: {e}")
 
         # ── deadline ──
         dl = sess.get("deadline")
@@ -715,9 +719,13 @@ async def on_message(message: discord.Message):
         total    = sess["total"] = len(qs)
         step     = sess["step"]
 
-        sess["answers"][step] = message.content.strip()
-        sess["step"] = step + 1
+sess["answers"][step] = message.content.strip()
+    sess["step"] = step + 1
+    try:
         await save_state()
+        print(f"[DEBUG] on_message: saved answer step={step + 1} for uid={uid}")
+    except Exception as e:
+        print(f"[ERROR] on_message: save_state after answer failed: {e}")
 
         # ── all done → confirmation embed ──
         if step + 1 >= total:
