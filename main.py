@@ -596,6 +596,19 @@ async def on_ready():
         print(f"Sync error: [{type(e).__name__}] {e}")
         import traceback; traceback.print_exc()
 
+    # ── Status ──────────────────────────────────────────────
+    status_text = os.getenv("STATUS_TEXT", "ChaosFFA")
+    status_type = os.getenv("STATUS_TYPE", "online").lower()
+    _STATUS_MAP = {
+        "online":   discord.Status.online,
+        "idle":     discord.Status.idle,
+        "dnd":      discord.Status.do_not_disturb,
+        "invisible":discord.Status.offline,
+    }
+    activity = discord.CustomActivity(name=status_text)
+    await bot.change_presence(status=_STATUS_MAP.get(status_type, discord.Status.online), activity=activity)
+    print(f"[STATUS] {status_type} | {status_text}")
+
     # ── Per-guild instant sync to every guild the bot is already in ──
     if bot.guilds:
         ok = fail = 0
