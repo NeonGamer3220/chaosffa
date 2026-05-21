@@ -128,6 +128,7 @@ def _dt(s: str | datetime.datetime) -> datetime.datetime:
 
 async def load_state() -> None:
     """Restore sessions + fingerprints from disk into the global dict."""
+    _STORE.parent.mkdir(parents=True, exist_ok=True)
     try:
         data = json.loads(_STORE.read_text(encoding="utf-8"))
     except Exception:
@@ -143,7 +144,6 @@ async def load_state() -> None:
             blob["_seen"] = set(blob["_seen"])
         sessions[int(uid_s)] = blob
 
-    # merge fingerprint overrides
     try:
         fp = json.loads(_FP_PATH.read_text(encoding="utf-8"))
     except Exception:
@@ -286,7 +286,7 @@ class StartView(discord.ui.View):
         if sess.get("_handling"):
             return await interaction.response.defer(ephemeral=True)
         sess["_handling"] = True
-        await save_async()  # persist handling flag
+        asyncio.create_task(save_state())  # persist handling flag
 
         role   = sess["type"]
         dl     = _now() + datetime.timedelta(minutes=TIME_LIMIT_MINUTES)
@@ -306,7 +306,7 @@ class StartView(discord.ui.View):
         sess["step"]        = 0
         sess["answers"]     = {}
         sess["_interacted"] = True   # mark as started — ignore old re-send attempts
-        await save_async()
+        asyncio.create_task(save_state())
 
         qs   = QUESTIONS[role]
         total = len(qs)
@@ -334,22 +334,22 @@ class QuestionView(discord.ui.View):
         super().__init__(timeout=None)
         self.role  = role
         self.total = total
-        b = discord.ui.Button(label="Jelentkez\u00e9s lez\u00e1r\u00e1sa", style=discord.ButtonStyle.red)
+        b = discord.ui.Button(label="Jelentkezés lezárása", style=discord.ButtonStyle.red)
         b.callback = self._close
         self.add_item(b)
 
     async def _close(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sessions.pop(uid, None)
-        await save_async()
+        asyncio.create_task(save_state())
         self.stop()
         for c in self.children:
             c.disabled = True
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(
             embed=discord.Embed(
-                title="**Jelentkez\u00e9s megszak\u00edtva**",
-                description=f"Sikeresen megszak\u00edtottad a ChaosFFA {self.role} jelentkez\u00e9st!",
+                title="**Jelentkezés megszakítva**",
+                description=f"Sikeresen megszakítottad a ChaosFFA {self.role} jelentkezést!",
                 color=LIGHT_RED))
 
 
@@ -435,6 +435,14 @@ class SubmitView(discord.ui.View):
         a_name   = self.aname
         sub_name = sess["submitter_name"]
         staff_ch = bot.get_channel(STAFF_CHANNEL_ID)
+        if staff_ch is None:
+            try:
+                staff_guild = bot.get_guild(STAFF_CHANNEL_ID) or (await bot.fetch_guild(GUILD_ID) if GUILD_ID else None)
+                if staff_guild:
+                    staff_ch = staff_guild.get_channel(STAFF_CHANNEL_ID) or await staff_guild.fetch_channel(STAFF_CHANNEL_ID)
+            except Exception as e:
+                return await interaction.response.send_message(
+                    f"Nem sikerült elérni a staff csatornát: {e}", ephemeral=True)
 
         self.stop()
         for c in self.children:
@@ -668,12 +676,13 @@ async def sendtgf(interaction: discord.Interaction,
         "deadline":       None,
         "_seen":          set(),
         "_interacted":    False,
+        "_handling":      False,
         "_qv":            None,
     }
-    await save_async()
+    asyncio.create_task(save_state())
 
     await interaction.response.send_message(
-        f"Jelentkez\u00e9si k\u00e9rd\u0151\u00edv elk\u00fcldve {member.mention} ({role}).",
+        f"Jelentkezési kérdőív elküldve {member.mention} ({role}).",
         ephemeral=True)
 
 
@@ -698,38 +707,34 @@ async def on_message(message: discord.Message):
             print(f"[DEBUG] on_message: _interacted is False for uid={uid}")
             return
 
-        # ── idempotency: skip messages already processed ──
         seen: set[int] = sess.get("_seen", set())
         if message.id in seen:
             print(f"[DEBUG] on_message: message {message.id} already seen, skipping")
             return
         seen.add(message.id)
         sess["_seen"] = seen
-        await save_state()
+        asyncio.create_task(save_state())
 
-        # ── deadline ──
         dl = sess.get("deadline")
         if dl and _now() > _dt(dl):
             sessions.pop(uid, None)
-            await save_state()
+            asyncio.create_task(save_state())
             return await message.channel.send(
                 "⏰ A jelentkezési idő **lejárt**! A jelentkezés nem kerül beküldésre.")
 
-        role     = sess["type"]
-        qs       = QUESTIONS[role]
-        total    = sess["total"] = len(qs)
-        step     = sess["step"]
+        role  = sess["type"]
+        qs    = QUESTIONS[role]
+        total = sess.get("total") or len(qs)
+        step  = sess["step"]
 
         sess["answers"][step] = message.content.strip()
         sess["step"] = step + 1
-        await save_state()
+        next_step = sess["step"]
+        asyncio.create_task(save_state())
 
-        # ── all done → confirmation embed ──
         if step + 1 >= total:
             sta = sess.get("started_at") or _now()
             el  = int((_now() - sta).total_seconds())
-            sessions.pop(uid, None)
-            await save_state()
             e = discord.Embed(
                 title=f"**ChaosFFA {role} jelentkezés**",
                 description=(
@@ -745,16 +750,14 @@ async def on_message(message: discord.Message):
             print(f"[DEBUG] on_message: all done for uid={uid}, showing confirmation")
             return
 
-        # ── next question ──
-        nxt  = sess["step"]
-        q    = qs[nxt]
-        e    = discord.Embed(
-            title=f"**ChaosFFA {role} jelentkezés – {nxt + 1}. kérdés**",
+        q = qs[next_step]
+        e = discord.Embed(
+            title=f"**ChaosFFA {role} jelentkezés – {next_step + 1}. kérdés**",
             description=q, color=LIGHT_PURPLE)
         e.set_footer(text=f"Válaszként küldj DM üzenetet a botnak.\n"
-                            f"Lejárat: 7 napja\n{nxt + 1}/{total} kérdés")
+                            f"Lejárat: 7 napja\n{next_step + 1}/{total} kérdés")
         await message.channel.send(embed=e)
-        print(f"[DEBUG] on_message: sent next question {nxt + 1}/{total} to uid={uid}")
+        print(f"[DEBUG] on_message: sent next question {next_step + 1}/{total} to uid={uid}")
     except Exception as exc:
         print(f"[ERROR] on_message failed: {exc}")
         import traceback; traceback.print_exc()
