@@ -645,12 +645,15 @@ async def sendtgf(interaction: discord.Interaction,
         color=LIGHT_RED)
     view = StartView(role)
 
-    try:
+try:
         dm_channel = await member.create_dm()
         await dm_channel.send(embed=embed, view=view)
     except discord.Forbidden:
         return await interaction.response.send_message(
-            f"Nem siker\u00fclt DM-t k\u00fcldeni {member.mention}-nak.", ephemeral=True)
+            f"Nem sikerült DM-t küldeni {member.mention}-nak.", ephemeral=True)
+    except Exception as e:
+        return await interaction.response.send_message(
+            f"Hiba a DM küldésekor: {type(e).__name__}: {e}", ephemeral=True)
 
     sessions[member.id] = {
         "submitter":      interaction.user.id,
