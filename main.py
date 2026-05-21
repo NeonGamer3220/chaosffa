@@ -663,26 +663,46 @@ async def sendtgf(
     role = type_.value
     member: discord.Member | None = None
 
-    # ① Raw numeric ID
-    if username.isdigit():
-        member = interaction.guild.get_member(int(username))
+    def _extract_id(raw: str) -> int | None:
+        clean = raw.strip("<@!> ")
+        return int(clean) if clean.isdigit() else None
 
-    # ② Mention <@…> / <@!…>
-    if member is None:
-        raw = username.strip("<@!> ")
-        if raw.isdigit():
-            member = interaction.guild.get_member(int(raw))
+    # ① Try mention / raw numeric ID → REST fetch_user (always works, no cache / intent needed)
+    target_id = _extract_id(username)
+    if not target_id:
+        target_id = _extract_id(username.strip())
 
-    # ③ Username match (case-insensitive)
+    candidate_user: discord.User | None = None
+    if target_id:
+        try:
+            candidate_user = await bot.fetch_user(target_id)
+        except discord.NotFound:
+            candidate_user = None
+
+    if candidate_user and interaction.guild:
+        # Convert the User → Member (REST, not cache)
+        try:
+            member = await interaction.guild.fetch_member(candidate_user.id)
+        except discord.NotFound:
+            member = None
+
+    # ② Fall back: scan guild.members via cache
     if member is None:
-        for m in interaction.guild.members:
-            if m.name.lower() == username.lower():
-                member = m
-                break
+        try:
+            guild = interaction.guild or await bot.fetch_guild(GUILD_ID) if GUILD_ID else None
+            if guild:
+                for m in guild.members:
+                    if m.name.lower() == username.lower():
+                        member = m
+                        break
+        except Exception:
+            pass
 
     if member is None:
+        name_part = f" (`{username}`)"
         return await interaction.response.send_message(
-            f"Nem található felhasználó a szerveren: `{username}`", ephemeral=True
+            f"Nem található felhasználó a szerveren{name_part}.",
+            ephemeral=True,
         )
 
     # ── Build initial embed ──
