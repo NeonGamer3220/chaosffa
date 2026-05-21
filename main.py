@@ -645,7 +645,7 @@ async def sendtgf(interaction: discord.Interaction,
         color=LIGHT_RED)
     view = StartView(role)
 
-try:
+    try:
         dm_channel = await member.create_dm()
         await dm_channel.send(embed=embed, view=view)
     except discord.Forbidden:
