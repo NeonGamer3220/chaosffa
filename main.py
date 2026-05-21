@@ -121,7 +121,9 @@ def _now() -> datetime.datetime:
 def _iso(dt: datetime.datetime) -> str:
     return dt.isoformat()
 
-def _dt(s: str) -> datetime.datetime:
+def _dt(s: str | datetime.datetime) -> datetime.datetime:
+    if isinstance(s, datetime.datetime):
+        return s
     return datetime.datetime.fromisoformat(s)
 
 async def load_state() -> None:
