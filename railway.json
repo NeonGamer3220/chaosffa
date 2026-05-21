@@ -6,6 +6,7 @@
   "deploy": {
     "startCommand": "python main.py",
     "sleepApplication": false,
+    "serverless": true,
     "watcher": {
       "enabled": false
     }
