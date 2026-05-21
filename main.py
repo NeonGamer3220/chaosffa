@@ -369,7 +369,7 @@ class ConfirmView(discord.ui.View):
 
     async def _go(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
-        sess = sessions.pop(uid, None)
+        sess = sessions.get(uid)
         if not sess:
             return await interaction.response.send_message(
                 "A munkamenet nem tal\u00e1lhat\u00f3.", ephemeral=True)
