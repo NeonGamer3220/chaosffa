@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 import datetime
 import asyncio
@@ -131,24 +131,48 @@ def _dt(s: str) -> datetime.datetime:
 
 
 async def _load_sessions() -> dict[int, dict]:
-    """Load persisted sessions, dropping any that are past their deadline."""
+    """Load persisted sessions + fingerprint cache, dropping expired ones."""
+    sessions: dict[int, dict] = {}
+
+    # 1) Load full session store
     try:
         raw = _STORE_PATH.read_text(encoding="utf-8")
         data = json.loads(raw)
     except FileNotFoundError:
-        return {}
+        data = {}
     except Exception:
-        return {}
+        data = {}
 
     now = _now_utc()
-    sessions = {}
     for uid_str, blob in data.items():
         try:
             if blob.get("deadline") and now > _dt(blob["deadline"]):
                 continue  # expired
         except Exception:
             pass
+        # _seen_msgs persisted as list – convert back to set
+        if "_seen_msgs" in blob and isinstance(blob["_seen_msgs"], list):
+            blob["_seen_msgs"] = set(blob["_seen_msgs"])
         sessions[int(uid_str)] = blob
+
+    # 2) Load fingerprint cache (overrides _seen_msgs from session file)
+    try:
+        fp_raw = _FP_PATH.read_text(encoding="utf-8")
+        fp_data = json.loads(fp_raw)
+    except FileNotFoundError:
+        fp_data = {}
+    except Exception:
+        fp_data = {}
+
+    for uid_str, msg_ids in fp_data.items():
+        uid = int(uid_str)
+        if uid in sessions:
+            old = sessions[uid].get("_seen_msgs", set())
+            if not isinstance(old, set):
+                old = set()
+            new = set(msg_ids) if isinstance(msg_ids, list) else {msg_ids}
+            sessions[uid]["_seen_msgs"] = old | new
+
     return sessions
 
 
@@ -157,20 +181,67 @@ async def _save_sessions() -> None:
     async with _SAVE_LOCK:
         to_save = {}
         for uid, s in globals()["sessions"].items():
-            safe = {k: v for k, v in s.items() if k not in ("channel", "view", "review_msg")}
+            safe = {k: v for k, v in s.items()
+                    if k not in ("channel", "view", "review_msg")}
             if isinstance(safe.get("started_at"), datetime.datetime):
                 safe["started_at"] = _iso(safe["started_at"])
             if isinstance(safe.get("deadline"), datetime.datetime):
                 safe["deadline"] = _iso(safe["deadline"])
+            # sets not JSON-serialisable – convert to list
+            if isinstance(safe.get("_seen_msgs"), set):
+                safe["_seen_msgs"] = sorted(safe["_seen_msgs"])
             to_save[str(uid)] = safe
         _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = _STORE_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(to_save, ensure_ascii=False, indent=2), encoding="utf-8")
-        # atomic replace
         try:
+            tmp.write_text(json.dumps(to_save, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
             tmp.replace(_STORE_PATH)
         except Exception:
             pass
+
+
+_FP_PATH = Path("/data/fp.json")   # message fingerprints (separate file)
+
+async def _async_save() -> None:
+    """Persist fingerprints atomically; then fire full session save."""
+    # ── lightweight fingerprint write (under lock, very fast) ──
+    async with _SAVE_LOCK:
+        raw_fp = {}
+        for uid, s in globals()["sessions"].items():
+            seen = s.get("_seen_msgs")
+            if isinstance(seen, set):
+                raw_fp = {str(uid): sorted(seen)}
+                break
+        if raw_fp:
+            _FP_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _FP_PATH.with_suffix(".tmp")
+            try:
+                tmp.write_text(json.dumps(raw_fp, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+                tmp.replace(_FP_PATH)
+            except Exception:
+                pass
+    # ── full save in background (no lock held) ──
+    asyncio.create_task(_save_sessions())
+
+async def _async_save() -> None:
+    """Persist fingerprints atomically (for dedup) then fire async full save."""
+    async with _SAVE_LOCK:
+        raw = {}
+        for uid, s in globals()["sessions"].items():
+            seen = s.get("_seen_msgs")
+            if isinstance(seen, set):
+                raw[str(uid)] = sorted(seen)
+        if raw:
+            _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STORE_PATH.with_suffix(".finger.tmp")
+            tmp.write_text(json.dumps(raw), encoding="utf-8")
+            try:
+                tmp.replace(_STORE_PATH)
+            except Exception:
+                pass
+    asyncio.create_task(_save_sessions())
 
 
 async def _async_save() -> None:
@@ -233,7 +304,7 @@ class _CloseBtn(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sessions.pop(uid, None)
-        await _async_save()
+        asyncio.create_task(_async_save())
         if self.view:
             self.view.stop()
         for c in (self.view.children if self.view else []):
@@ -298,7 +369,7 @@ class StartView(discord.ui.View):
         total     = len(questions)
         q_view    = QuestionView(role, total)
         session["view"] = q_view
-        await _async_save()
+        asyncio.create_task(_async_save())
 
         # Resolve DM channel — first cache, then REST create_dm
         ch = bot.get_channel(session["dm_channel_id"]) if session.get("dm_channel_id") else None
@@ -341,7 +412,7 @@ class QuestionView(discord.ui.View):
     async def _close(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sessions.pop(uid, None)
-        await _async_save()
+        asyncio.create_task(_async_save())
         self.stop()
         for c in self.children:
             c.disabled = True
@@ -463,7 +534,7 @@ class SubmitView(discord.ui.View):
         for c in self.children:
             c.disabled = True
         await interaction.response.edit_message(view=self)
-        await _async_save()
+        asyncio.create_task(_async_save())
 
         qa_lines = build_qa_lines(role, answers, total)
         staff_embed = discord.Embed(
@@ -767,7 +838,7 @@ async def sendtgf(interaction: discord.Interaction,
         "view":           None,
         "review_msg_id":  None,
     }
-    await _async_save()
+    asyncio.create_task(_async_save())
 
     await interaction.response.send_message(
         f"Jelentkez\u00e9si k\u00e9rd\u0151\u00edv elk\u00fcldve {member.mention} felhaszn\u00e1l\u00f3nak ({role}).",
@@ -792,10 +863,18 @@ async def on_message(message: discord.Message):
     if session.get("step") is None:
         return
 
+    # ── idempotency guard: ignore messages we already processed ──
+    seen: set[int] = session.get("_seen_msgs", set())
+    if message.id in seen:
+        return
+    seen.add(message.id)
+    session["_seen_msgs"] = seen
+    asyncio.create_task(_async_save())   # persist fingerprint, don't block
+
     deadline = session.get("deadline")
     if deadline and _now_utc() > _dt(deadline):
         sessions.pop(uid, None)
-        await _async_save()
+        asyncio.create_task(_async_save())
         return await message.channel.send(
             "⏰ A jelentkez\u00e9si id\u0151 **lej\u00e1rt**! A jelentkez\u00e9s nem ker\u00fcl bek\u00fcld\u00e9sre."
         )
@@ -808,14 +887,14 @@ async def on_message(message: discord.Message):
     session["answers"][step] = message.content.strip()
     step += 1
     session["step"] = step
-    await _async_save()
+    asyncio.create_task(_async_save())
 
     if step >= total:
         started_at = session.get("started_at") or _now_utc()
         now        = _now_utc()
         elapsed_s  = int((now - started_at).total_seconds())
         sessions.pop(uid, None)
-        await _async_save()
+        asyncio.create_task(_async_save())
 
         embed = discord.Embed(
             title=f"**ChaosFFA {role} jelentkez\u00e9s**",
