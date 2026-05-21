@@ -273,12 +273,18 @@ class StartView(discord.ui.View):
         self.add_item(g)
         self.add_item(CloseBtn(role, "M\u00e9gsem"))
 
-    async def _go(self, interaction: discord.Interaction) -> None:
+async def _go(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sess = sessions.get(uid)
         if not sess:
             return await interaction.response.send_message(
-                "A munkamenet lej\u00e1rt vagy nem tal\u00e1lhat\u00f3.", ephemeral=True)
+                "A munkamenet lejárt vagy nem található.", ephemeral=True)
+
+        # prevent double-press / double-callback race
+        if sess.get("_handling"):
+            return await interaction.response.defer(ephemeral=True)
+        sess["_handling"] = True
+        await save_async()  # persist handling flag
 
         role   = sess["type"]
         dl     = _now() + datetime.timedelta(minutes=TIME_LIMIT_MINUTES)
@@ -308,15 +314,15 @@ class StartView(discord.ui.View):
         ch = await dm_ch(sess)
         if ch is None:
             return await interaction.followup.send(
-                "Nem siker\u00fclt \u00fajra megnyitni a DM csatorn\u00e1t.",
-                ephemeral=True)
+                "Nem sikerült újra megnyitni a DM csatornát.", ephemeral=True)
 
         e = discord.Embed(
-            title=f"**ChaosFFA {role} jelentkez\u00e9s \u2013 1. k\u00e9rd\u00e9s**",
+            title=f"**ChaosFFA {role} jelentkezés – 1. kérdés**",
             description=qs[0], color=LIGHT_PURPLE)
-        e.set_footer(text=f"V\u00e1laszk\u00e9nt k\u00fcldj DM \u00fczenetet a botnak.\n"
-                          f"Lej\u00e1rat: 7 napja\n1/{total} k\u00e9rd\u00e9s")
+        e.set_footer(text=f"Válaszként küldj DM üzenetet a botnak.\n"
+                            f"Lejárat: 7 napja\n1/{total} kérdés")
         await ch.send(embed=e, view=v)
+        print(f"[DEBUG] _go: sent first question to uid={uid}, step=0")
 
 
 # ─────────────── View 2 – per-question ───────────────
@@ -670,69 +676,83 @@ async def sendtgf(interaction: discord.Interaction,
 
 @bot.event
 async def on_message(message: discord.Message):
-    await bot.process_commands(message)
-    if not isinstance(message.channel, discord.DMChannel) or message.author.bot:
-        return
+    try:
+        await bot.process_commands(message)
+        if not isinstance(message.channel, discord.DMChannel) or message.author.bot:
+            return
 
-    uid  = message.author.id
-    sess = sessions.get(uid)
-    if not sess or sess.get("step") is None or not sess.get("_interacted"):
-        return
+        uid  = message.author.id
+        sess = sessions.get(uid)
+        if not sess:
+            print(f"[DEBUG] on_message: no session for uid={uid}")
+            return
+        if sess.get("step") is None:
+            print(f"[DEBUG] on_message: step is None for uid={uid}")
+            return
+        if not sess.get("_interacted"):
+            print(f"[DEBUG] on_message: _interacted is False for uid={uid}")
+            return
 
-    # ── idempotency: skip messages already processed ──
-    seen: set[int] = sess.get("_seen", set())
-    if message.id in seen:
-        return
-    seen.add(message.id)
-    sess["_seen"] = seen
-    await save_state()
-
-    # ── deadline ──
-    dl = sess.get("deadline")
-    if dl and _now() > _dt(dl):
-        sessions.pop(uid, None)
+        # ── idempotency: skip messages already processed ──
+        seen: set[int] = sess.get("_seen", set())
+        if message.id in seen:
+            print(f"[DEBUG] on_message: message {message.id} already seen, skipping")
+            return
+        seen.add(message.id)
+        sess["_seen"] = seen
         await save_state()
-        return await message.channel.send(
-            "\u23f0 A jelentkez\u00e9si id\u0151 **lej\u00e1rt**! A jelentkez\u00e9s nem ker\u00fcl bek\u00fcld\u00e9sre.")
 
-    role     = sess["type"]
-    qs       = QUESTIONS[role]
-    total    = sess["total"] = len(qs)
-    step     = sess["step"]
+        # ── deadline ──
+        dl = sess.get("deadline")
+        if dl and _now() > _dt(dl):
+            sessions.pop(uid, None)
+            await save_state()
+            return await message.channel.send(
+                "⏰ A jelentkezési idő **lejárt**! A jelentkezés nem kerül beküldésre.")
 
-    sess["answers"][step] = message.content.strip()
-    sess["step"] = step + 1
-    await save_state()
+        role     = sess["type"]
+        qs       = QUESTIONS[role]
+        total    = sess["total"] = len(qs)
+        step     = sess["step"]
 
-    # ── all done → confirmation embed ──
-    if step + 1 >= total:
-        sta = sess.get("started_at") or _now()
-        el  = int((_now() - sta).total_seconds())
-        sessions.pop(uid, None)
+        sess["answers"][step] = message.content.strip()
+        sess["step"] = step + 1
         await save_state()
-        e = discord.Embed(
-            title=f"**ChaosFFA {role} jelentkez\u00e9s**",
-            description=(
-                "Sikeresen megv\u00e1laszoltad az \u00f6sszes k\u00e9rd\u00e9st.\n\n"
-                "Ha biztos vagy benne, hogy bek\u00fcld\u00f6d a jelentkez\u00e9st, "
-                "nyomj a bek\u00fcld\u00e9s gombra."),
-            color=LIGHT_PURPLE)
-        e.add_field(name="Felhaszn\u00e1l\u00f3",
-                    value=f"@{message.author.display_name}", inline=False)
-        e.add_field(name="Kit\u00f6lt\u00e9si id\u0151", value=fmt_duration(el), inline=False)
-        e.set_footer(text=f"Megv\u00e1laszolt k\u00e9rd\u00e9sek: {total}/{total}")
-        await message.channel.send(embed=e, view=ConfirmView(uid, role, total, sta))
-        return
 
-    # ── next question ──
-    nxt  = step + 1
-    q    = qs[nxt]
-    e    = discord.Embed(
-        title=f"**ChaosFFA {role} jelentkez\u00e9s \u2013 {nxt}. k\u00e9rd\u00e9s**",
-        description=q, color=LIGHT_PURPLE)
-    e.set_footer(text=f"V\u00e1laszk\u00e9nt k\u00fcldj DM \u00fczenetet a botnak.\n"
-                      f"Lej\u00e1rat: 7 napja\n{nxt}/{total} k\u00e9rd\u00e9s")
-    await message.channel.send(embed=e)
+        # ── all done → confirmation embed ──
+        if step + 1 >= total:
+            sta = sess.get("started_at") or _now()
+            el  = int((_now() - sta).total_seconds())
+            sessions.pop(uid, None)
+            await save_state()
+            e = discord.Embed(
+                title=f"**ChaosFFA {role} jelentkezés**",
+                description=(
+                    "Sikeresen megválaszoltad az összes kérdést.\n\n"
+                    "Ha biztos vagy benne, hogy beküldöd a jelentkezést, "
+                    "nyomj a beküldés gombra."),
+                color=LIGHT_PURPLE)
+            e.add_field(name="Felhasználó",
+                        value=f"@{message.author.display_name}", inline=False)
+            e.add_field(name="Kitöltési idő", value=fmt_duration(el), inline=False)
+            e.set_footer(text=f"Megválaszolt kérdések: {total}/{total}")
+            await message.channel.send(embed=e, view=ConfirmView(uid, role, total, sta))
+            print(f"[DEBUG] on_message: all done for uid={uid}, showing confirmation")
+            return
+
+        # ── next question ──
+        nxt  = sess["step"]  # use updated step (not step + 1 which was old)
+        q    = qs[nxt]
+        e    = discord.Embed(
+            title=f"**ChaosFFA {role} jelentkezés – {nxt + 1}. kérdés**",
+            description=q, color=LIGHT_PURPLE)
+        e.set_footer(text=f"Válaszként küldj DM üzenetet a botnak.\n"
+                            f"Lejárat: 7 napja\n{nxt + 1}/{total} kérdés")
+        await message.channel.send(embed=e)
+        print(f"[DEBUG] on_message: sent next question {nxt + 1}/{total} to uid={uid}")
+    except Exception as exc:
+        print(f"[ERROR] on_message failed: {exc}")
+        import traceback; traceback.print_exc()
 
 
 if __name__ == "__main__":
