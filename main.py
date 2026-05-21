@@ -582,7 +582,25 @@ async def on_ready():
             scope = "global"
         print(f"Logged in as {bot.user} | synced {len(synced)} slash commands ({scope})")
     except Exception as e:
-        print(f"Sync error: {e}")
+        print(f"Sync error: [{type(e).__name__}] {e}")
+        import traceback; traceback.print_exc()
+
+    # Also sync to every guild the bot is already in (instant, no GUILD_ID needed)
+    try:
+        count = 0
+        failures = []
+        for g in bot.guilds:
+            try:
+                await bot.tree.sync(guild=discord.Object(id=g.id))
+                count += 1
+            except Exception as exc:
+                failures.append(f"{g.name}({g.id}): {exc}")
+        if failures:
+            print(f"Per-guild sync: {count} ok, {len(failures)} failed: {failures}")
+        else:
+            print(f"Per-guild sync: all {count} guilds ok")
+    except Exception as e:
+        print(f"Per-guild sync error: {e}")
 
 
 # ─── Slash command ───────────────────────────────────────────────
