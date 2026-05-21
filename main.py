@@ -130,7 +130,7 @@ review_sessions: dict[int, dict] = {}
 
 # ─────────────── helpers ───────────────
 def deadline_from_now() -> datetime.datetime:
-    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=TIME_LIMIT)
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=TIME_LIMIT_MINUTES)
 
 
 def fmt_deadline(dt: datetime.datetime) -> str:
@@ -158,8 +158,8 @@ def build_qa_lines(role: str, answers: dict[int, str], total: int) -> str:
 class _CloseBtn(discord.ui.Button):
     """Reusable red cancel/close button tied to a role."""
 
-    def __init__(self, role: str, label: str, emoji: str = "🔴"):
-        super().__init__(label=label, style=discord.ButtonStyle.red, emoji=emoji)
+    def __init__(self, role: str, label: str):
+        super().__init__(label=label, style=discord.ButtonStyle.red)
         self.role = role
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -181,7 +181,7 @@ class StartView(discord.ui.View):
         self.role = role
 
         green = discord.ui.Button(
-            label="Jelentkezés indítása", style=discord.ButtonStyle.green, emoji="🟢"
+            label="Jelentkezés indítása", style=discord.ButtonStyle.green
         )
         green.callback = self._start
         self.add_item(green)
@@ -241,8 +241,7 @@ class QuestionView(discord.ui.View):
         self.total = total
         self.add_item(
             discord.ui.Button(
-                label="Jelentkezés lezárása", style=discord.ButtonStyle.red, emoji="🔴"
-            )
+                label="Jelentkezés lezárása", style=discord.ButtonStyle.red            )
         )
         for child in self.children:
             child.callback = self._close  # type: ignore[assignment]
@@ -276,7 +275,7 @@ class SubmitViewConfirmation(discord.ui.View):
         self.started_at = started_at
 
         submit_btn = discord.ui.Button(
-            label="Jelentkezés beküldése", style=discord.ButtonStyle.green, emoji="📤"
+            label="Jelentkezés beküldése", style=discord.ButtonStyle.green
         )
         submit_btn.callback = self._submit
         self.add_item(submit_btn)
@@ -346,7 +345,7 @@ class SubmitView(discord.ui.View):
         self.started_at    = started_at
 
         submit_btn = discord.ui.Button(
-            label="Jelentkezés beküldése", style=discord.ButtonStyle.green, emoji="✅"
+            label="Jelentkezés beküldése", style=discord.ButtonStyle.green
         )
         submit_btn.callback = self._submit_to_staff
         self.add_item(submit_btn)
@@ -429,13 +428,13 @@ class StaffReviewView(discord.ui.View):
         self.total          = total
 
         accept_btn = discord.ui.Button(
-            label="Elfogadás", style=discord.ButtonStyle.green, emoji="✅"
+            label="Elfogadás", style=discord.ButtonStyle.green
         )
         accept_btn.callback = self._accept
         self.add_item(accept_btn)
 
         reject_btn = discord.ui.Button(
-            label="Elutasítás", style=discord.ButtonStyle.red, emoji="❌"
+            label="Elutasítás", style=discord.ButtonStyle.red
         )
         reject_btn.callback = self._reject
         self.add_item(reject_btn)
@@ -511,8 +510,6 @@ class ReviewModal(discord.ui.Modal):
                 )
         except Exception:
             pass
-
-        await interaction.response.defer()
 
     def _build_final_embed(self, interaction: discord.Interaction) -> discord.Embed:
         reviewer_name = str(interaction.user)
