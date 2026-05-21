@@ -265,15 +265,7 @@ class CloseBtn(discord.ui.Button):
 # ─────────────── View 1 – initial embed ───────────────
 
 class StartView(discord.ui.View):
-    def __init__(self, role: str):
-        super().__init__(timeout=None)
-        self.role = role
-        g = discord.ui.Button(label="Jelentkez\u00e9s ind\u00edt\u00e1sa", style=discord.ButtonStyle.green)
-        g.callback = self._go
-        self.add_item(g)
-        self.add_item(CloseBtn(role, "M\u00e9gsem"))
-
-async def _go(self, interaction: discord.Interaction) -> None:
+    async def _go(self, interaction: discord.Interaction) -> None:
         uid = interaction.user.id
         sess = sessions.get(uid)
         if not sess:
@@ -292,10 +284,10 @@ async def _go(self, interaction: discord.Interaction) -> None:
         # block duplicate presses (same interaction = same message)
         await interaction.response.edit_message(
             embed=discord.Embed(
-                title="**Jelentkez\u00e9s elind\u00edtva**",
+                title="**Jelentkezés elindítva**",
                 description=(
-                    f"Sikeresen elind\u00edtottad a ChaosFFA {role} jelentkez\u00e9st.\n"
-                    f"Hat\u00e1rid\u0151: {fmt_deadline(dl)}"),
+                    f"Sikeresen elindítottad a ChaosFFA {role} jelentkezést.\n"
+                    f"Határidő: {fmt_deadline(dl)}"),
                 color=LIGHT_PURPLE),
             view=None)
 
@@ -323,6 +315,14 @@ async def _go(self, interaction: discord.Interaction) -> None:
                             f"Lejárat: 7 napja\n1/{total} kérdés")
         await ch.send(embed=e, view=v)
         print(f"[DEBUG] _go: sent first question to uid={uid}, step=0")
+
+    def __init__(self, role: str):
+        super().__init__(timeout=None)
+        self.role = role
+        g = discord.ui.Button(label="Jelentkezés indítása", style=discord.ButtonStyle.green)
+        g.callback = self._go
+        self.add_item(g)
+        self.add_item(CloseBtn(role, "Mégsem"))
 
 
 # ─────────────── View 2 – per-question ───────────────
