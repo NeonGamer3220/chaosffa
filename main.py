@@ -18,6 +18,25 @@ STAFF_CHANNEL_ID  = 1507023523674193962
 GUILD_ID          = int(os.getenv("GUILD_ID", "0"))
 TIME_LIMIT_MINUTES = 60
 
+# ─────────────── ticket constants ───────────────
+TICKET_CATEGORY_ID = 1501209051164442775
+TICKET_LOG_CHANNEL_ID = 1501208993245298748
+TICKET_ROLES = [
+    1506979682141339711,
+    1046880629976998008,
+    1501209237085229179,
+    1507699334009978961,
+    1410711932406730905
+]
+TICKET_TYPES = {
+    "csapattag_panasz": "Csapattag Panasz",
+    "szerver_panasz": "Szerver Panasz",
+    "otlet": "Ötlet",
+    "tgf": "TGF",
+    "egyeb": "Egyéb"
+}
+tickets_db: dict[int, dict] = {}  # channel_id → ticket data
+
 # ─────────────── questions ───────────────
 QUESTIONS: dict[str, list[str]] = {
     "Helper": [
@@ -262,6 +281,268 @@ async def callback(self, interaction: discord.Interaction) -> None:
                     color=LIGHT_RED))
         except Exception:
             pass
+
+
+# ─────────────── Ticket Buttons ───────────────
+
+class CloseTicketModal(discord.ui.Modal):
+    def __init__(self, ticket_creator_id: int, ticket_channel_id: int):
+        super().__init__(title="Hibajegy Lezárása")
+        self.ticket_creator_id = ticket_creator_id
+        self.ticket_channel_id = ticket_channel_id
+        
+        self.reason_input = discord.ui.TextInput(
+            label="Lezárás Oka",
+            placeholder="Írj egy rövid indoklást a hibajegy lezárásáért...",
+            required=True,
+            style=discord.TextStyle.paragraph
+        )
+        self.add_item(self.reason_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        
+        reason = self.reason_input.value
+        ticket_data = tickets_db.get(self.ticket_channel_id, {})
+        closer = interaction.user
+        
+        # Send DM to ticket creator with reason
+        try:
+            creator = await interaction.client.fetch_user(self.ticket_creator_id)
+            dm_embed = discord.Embed(
+                title="**Hibajegy Lezárva**",
+                description=f"A te hibajegyed ({ticket_data.get('type', 'Egyéb')}) lezárásra került.",
+                color=LIGHT_RED
+            )
+            dm_embed.add_field(name="**Lezárás Oka**", value=reason, inline=False)
+            dm_embed.add_field(name="Lezárta", value=f"{closer.mention} (@{closer.name})", inline=False)
+            await creator.send(embed=dm_embed)
+        except Exception as e:
+            print(f"[ERROR] DM send failed: {e}")
+        
+        # Log to logging channel
+        guild = interaction.guild
+        log_channel = guild.get_channel(TICKET_LOG_CHANNEL_ID)
+        if log_channel:
+            log_embed = discord.Embed(
+                title="**Ticket Closed**",
+                color=LIGHT_RED
+            )
+            log_embed.add_field(name="**Close Information**", value=f"**Ticket Name:** {ticket_data.get('channel_name', 'Unknown')}\n**Ticket ID:** {self.ticket_channel_id}", inline=False)
+            log_embed.add_field(name="**Creator Information**", value=f"**Creator:** {ticket_data.get('creator_mention', 'Unknown')}\n**Creator Username:** @{ticket_data.get('creator_username', 'Unknown')}\n**Creator ID:** {self.ticket_creator_id}", inline=False)
+            log_embed.add_field(name="**Executor Information**", value=f"**Executor:** {closer.mention}\n**Executor Username:** @{closer.name}\n**Executor ID:** {closer.id}", inline=False)
+            log_embed.add_field(name="**Reason**", value=reason, inline=False)
+            await log_channel.send(embed=log_embed)
+        
+        # Delete the ticket channel
+        ticket_channel = guild.get_channel(self.ticket_channel_id)
+        if ticket_channel:
+            await ticket_channel.delete()
+        
+        tickets_db.pop(self.ticket_channel_id, None)
+        await interaction.followup.send("Hibajegy sikeresen lezárva!", ephemeral=True)
+
+
+class AddUserModal(discord.ui.Modal):
+    def __init__(self, ticket_channel_id: int):
+        super().__init__(title="Felhasználó Hozzáadása")
+        self.ticket_channel_id = ticket_channel_id
+        
+        self.user_input = discord.ui.TextInput(
+            label="Felhasználó (@név vagy ID)",
+            placeholder="Pl. @username vagy 123456789",
+            required=True
+        )
+        self.add_item(self.user_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        
+        user_str = self.user_input.value.strip()
+        guild = interaction.guild
+        ticket_channel = guild.get_channel(self.ticket_channel_id)
+        
+        if not ticket_channel:
+            return await interaction.followup.send("Hibajegy csatorna nem található!", ephemeral=True)
+        
+        # Parse user
+        user_to_add = None
+        user_id = user_str.strip("<@!> ")
+        
+        if user_id.isdigit():
+            try:
+                user_to_add = await interaction.client.fetch_user(int(user_id))
+            except discord.NotFound:
+                return await interaction.followup.send("Felhasználó nem található!", ephemeral=True)
+        else:
+            for member in guild.members:
+                if member.name.lower() == user_str.lower() or member.display_name.lower() == user_str.lower():
+                    user_to_add = member
+                    break
+        
+        if not user_to_add:
+            return await interaction.followup.send("Felhasználó nem található!", ephemeral=True)
+        
+        # Add user to channel
+        try:
+            await ticket_channel.set_permissions(user_to_add, view_channel=True, send_messages=True)
+            await interaction.followup.send(f"{user_to_add.mention} hozzáadva a hibajegyhez!", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Hiba történt: {e}", ephemeral=True)
+
+
+class RenameTicketModal(discord.ui.Modal):
+    def __init__(self, ticket_channel_id: int):
+        super().__init__(title="Hibajegy Átnevezése")
+        self.ticket_channel_id = ticket_channel_id
+        
+        self.new_name_input = discord.ui.TextInput(
+            label="Új Név",
+            placeholder="Írj be egy új nevet a hibajegyhez...",
+            required=True,
+            max_length=100
+        )
+        self.add_item(self.new_name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        
+        new_name = self.new_name_input.value.strip()
+        guild = interaction.guild
+        ticket_channel = guild.get_channel(self.ticket_channel_id)
+        
+        if not ticket_channel:
+            return await interaction.followup.send("Hibajegy csatorna nem található!", ephemeral=True)
+        
+        try:
+            await ticket_channel.edit(name=new_name)
+            tickets_db[self.ticket_channel_id]['channel_name'] = new_name
+            await interaction.followup.send(f"Hibajegy sikeresen átnevezve: **{new_name}**", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Hiba történt: {e}", ephemeral=True)
+
+
+class TicketButtons(discord.ui.View):
+    def __init__(self, ticket_channel_id: int, ticket_creator_id: int):
+        super().__init__(timeout=None)
+        self.ticket_channel_id = ticket_channel_id
+        self.ticket_creator_id = ticket_creator_id
+
+    @discord.ui.button(label="Ticket Lezárása", style=discord.ButtonStyle.red)
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only admins can close
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Csak admin tudja lezárni a hibajegyet!", ephemeral=True)
+        
+        await interaction.response.send_modal(CloseTicketModal(self.ticket_creator_id, self.ticket_channel_id))
+
+    @discord.ui.button(label="Ticket Igénylése", style=discord.ButtonStyle.blurple)
+    async def request_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only staff can request
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Csak admin tudja igényelni a hibajegyet!", ephemeral=True)
+        
+        await interaction.response.send_message(
+            f"✅ {interaction.user.mention} fogja kezelni a hibajegyed!",
+            ephemeral=False
+        )
+
+    @discord.ui.button(label="Ticket Átnevezése", style=discord.ButtonStyle.blurple)
+    async def rename_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only admins can rename
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Csak admin tudja átnevezni a hibajegyet!", ephemeral=True)
+        
+        await interaction.response.send_modal(RenameTicketModal(self.ticket_channel_id))
+
+    @discord.ui.button(label="Hozzáadás", style=discord.ButtonStyle.blurple)
+    async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only admins can add users
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Csak admin tudja hozzáadni felhasználókat!", ephemeral=True)
+        
+        await interaction.response.send_modal(AddUserModal(self.ticket_channel_id))
+
+
+class TicketTypeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Csapattag Panasz", value="csapattag_panasz"),
+            discord.SelectOption(label="Szerver Panasz", value="szerver_panasz"),
+            discord.SelectOption(label="Ötlet", value="otlet"),
+            discord.SelectOption(label="TGF", value="tgf"),
+            discord.SelectOption(label="Egyéb", value="egyeb"),
+        ]
+        super().__init__(placeholder="Válassz hibajegy típust...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        ticket_type_key = self.values[0]
+        ticket_type = TICKET_TYPES.get(ticket_type_key, "Egyéb")
+        guild = interaction.guild
+        
+        # Create channel in category
+        category = discord.utils.get(guild.categories, id=TICKET_CATEGORY_ID)
+        if not category:
+            return await interaction.followup.send("Hibajegy kategória nem található!", ephemeral=True)
+        
+        # Generate channel name
+        channel_name = f"ticket-{interaction.user.name.lower()}_{ticket_type_key}"
+        
+        try:
+            # Create ticket channel
+            ticket_channel = await category.create_text_channel(
+                channel_name,
+                topic=f"Hibajegy típusa: {ticket_type}\nNyitotta: {interaction.user.name}"
+            )
+            
+            # Set permissions - only creator and staff can see
+            await ticket_channel.set_permissions(guild.default_role, view_channel=False)
+            await ticket_channel.set_permissions(interaction.user, view_channel=True, send_messages=True)
+            
+            # Add staff roles
+            for role_id in TICKET_ROLES:
+                role = guild.get_role(role_id)
+                if role:
+                    await ticket_channel.set_permissions(role, view_channel=True, send_messages=True)
+            
+            # Store ticket data
+            tickets_db[ticket_channel.id] = {
+                "creator_id": interaction.user.id,
+                "creator_mention": interaction.user.mention,
+                "creator_username": interaction.user.name,
+                "channel_name": channel_name,
+                "type": ticket_type,
+                "created_at": datetime.datetime.now(datetime.timezone.utc)
+            }
+            
+            # Build mention string for staff
+            staff_mentions = " ".join([f"<@&{role_id}>" for role_id in TICKET_ROLES])
+            
+            # Send welcome message
+            embed = discord.Embed(
+                title="**Ticket Megnyitva!**",
+                description=f"Üdv {interaction.user.mention}, köszönjük hogy a support csapatunktól szeretnél segítséget! Kérlek mondd el miért nyitottad a ticketet, és minél hamarabb megpróbálunk segíteni neked!",
+                color=LIGHT_GREEN
+            )
+            embed.add_field(name="**Kategória**", value=ticket_type, inline=False)
+            
+            view = TicketButtons(ticket_channel.id, interaction.user.id)
+            
+            await ticket_channel.send(f"{staff_mentions} {interaction.user.mention}", embed=embed, view=view)
+            
+            await interaction.followup.send(f"✅ Hibajegyed sikeresen létrehozva: {ticket_channel.mention}", ephemeral=True)
+            
+        except Exception as e:
+            print(f"[ERROR] Ticket creation failed: {e}")
+            await interaction.followup.send(f"Hiba történt a hibajegy létrehozásakor: {e}", ephemeral=True)
+
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketTypeSelect())
 
 
 # ─────────────── View 1 – initial embed ───────────────
@@ -602,6 +883,17 @@ async def on_ready():
     await bot.change_presence(status=sm.get(ty, discord.Status.online),
                               activity=discord.CustomActivity(name=st))
     print(f"[STATUS] {ty} | {st}")
+
+
+# ─── /sync ──────────────────────────────────────────────────
+
+@bot.tree.command(name="sync", description="Syncs all application commands")
+async def sync(interaction: discord.Interaction):
+    if interaction.user.id == 942847438934597657:
+        await bot.tree.sync()
+        await interaction.response.send_message("Commands synced successfully! 🚀")
+    else:
+        await interaction.response.send_message("You do not have permission to use this.", ephemeral=True)
 
 
 # ─── /sendtgf ──────────────────────────────────────────────
